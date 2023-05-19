@@ -1,0 +1,161 @@
+---
+title: "Model selection"
+author: "Ryan Moerer"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(fredr)
+library(dplyr)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(ggplot2)
+library(lubridate)
+
+fredr_set_key(Sys.getenv("FRED_KEY"))
+```
+
+## Read and clean data
+
+```{r}
+liquor_sales <- fredr_series_observations(
+  series_id = "MRTSSM4453USN",
+  observation_start = as.Date("2010-01-01"), # arbitrarily use data since 2010
+  observation_end = as.Date("2023-03-01")
+)
+
+liquor_sales <- liquor_sales %>%
+  mutate(year_month = yearmonth(date)) %>%
+  select(year_month, value) %>%
+  tidyr::drop_na(value) %>%
+  as_tsibble(index = year_month) |> 
+  mutate(value) |> 
+  filter(year(year_month) >= 2010) 
+
+glimpse(liquor_sales)
+```
+## Split data into training and test
+
+```{r}
+train <- liquor_sales |> filter(year(year_month) < 2021)
+test <- liquor_sales |> anti_join(train)
+```
+
+## Some plots of the data
+
+```{r}
+train %>%
+  autoplot(value)
+
+train %>%
+  autoplot(box_cox(value, guerrero(value)))
+
+train |> 
+  autoplot(log(value))
+
+train %>%
+  model(
+    STL(value, robust = T)
+  ) %>%
+  components() %>%
+  autoplot()
+
+train |> 
+  gg_season(value)
+
+train |> 
+  gg_season(difference(value))
+
+train |> 
+  gg_subseries(difference(value))
+
+train %>%
+  gg_tsdisplay(difference(value, 12) |> difference(), plot_type = "partial", lag_max = 36)
+```
+
+The variance seems to increase with the level of the series just slightly so we'll log transform our data.
+
+## Cross-validation
+
+I'm mostly interested in 1-month to 1-year ahead forecasts so we'll use cross-validation to see how both auto-selected ARIMA and ETS models do for 1-12 months ahead. 
+
+```{r, warning=FALSE}
+fc_cv <- train |> 
+  stretch_tsibble(.init = 12, .step = 1) |> 
+  model(
+    ARIMA(log(value)),
+    ETS(log(value))
+  ) |> 
+  forecast(h = 12)
+
+fc_cv |> 
+  accuracy(train) |> 
+  arrange(MAE)
+```
+
+The ETS model seems to outperform the ARIMA models just slightly.
+
+## Evaluate on final test set
+
+```{r}
+test_fc <- train |> 
+  model(
+    arima = ARIMA(log(value)),
+    ets = ETS(log(value)),
+    SNAIVE(log(value)),
+    NAIVE(log(value))
+  ) |> 
+  forecast(test)
+
+test_fc |> 
+  accuracy(test) |> 
+  arrange(MAE)
+
+test_fc |> 
+  autoplot(test) +
+  facet_wrap(~.model)
+```
+
+## Fit models on entirety of data
+
+```{r}
+fit <- liquor_sales |>
+  model(
+    arima = ARIMA(log(value)),
+    ets = ETS(log(value)),
+    snaive = SNAIVE(log(value))
+  )
+
+# a look at the fit
+x <- fit |> 
+  select(arima) |> 
+  report()
+
+fit |> 
+  select(arima) |> 
+  gg_tsresiduals()
+
+fit |> 
+  select(ets) |> 
+  report()
+
+fit |> 
+  select(ets) |> 
+  gg_tsresiduals()
+```
+
+There is definitely some autocorrelation in the residuals for both models so might need to be wary of forecast distributions.
+
+## Save models
+
+```{r}
+saveRDS(fit, here::here("models", "model_fits.rds"))
+```
+

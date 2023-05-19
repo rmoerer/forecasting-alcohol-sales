@@ -1,0 +1,126 @@
+---
+title: "Forecasting US beer, wine, and liqour store sales"
+author: "Ryan Moerer"
+date: "`r Sys.Date()`"
+output:
+  md_document:
+    variant: gfm
+---
+
+# Forecasting US beer, wine, and liqour store sales
+
+A repository for automated forecasting of US beer, wine, and liquor store sales using an ETS model.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, comment = "")
+
+library(fredr)
+library(dplyr)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(ggplot2)
+library(lubridate)
+library(distributional)
+library(DBI)
+
+source(here::here("R", "functions.R"))
+```
+
+## ETS model forecasts for the next 12 months
+
+```{r}
+# connect to db and extract forecasts & obs
+con <- dbConnect(RSQLite::SQLite(), here::here("database", "alcohol_sales.sqlite"))
+observations <- extract_observations(con)
+forecasts <- extract_forecasts(con)
+```
+
+```{r, out.width='100%', dpi=300}
+# generate plot of forecasts for the next 12 months
+curr_year_month <- max(observations$year_month)
+
+curr_forecasts <- forecasts |> 
+  filter(fit_year_month == curr_year_month, .model == "ets") |> 
+  make_fable()
+  
+curr_forecasts |> 
+  autoplot(
+    observations |> 
+      tail(3 * 12)
+  ) +
+  scale_x_yearmonth(date_breaks = "1 year") +
+  labs(
+    title = "Forecasts of retail beer, wine, and liquor store sales for the next 12 months",
+    x = "Month",
+    y = "Retail sales (In millions of dollars)"
+  )
+```
+
+
+```{r}
+curr_forecasts |> 
+  hilo(95) |> 
+  mutate(
+    .mean = format(round(.mean, 2), nsmall = 2),
+    lower = format(round(`95%`$lower, 2), nsmall = 2),
+    upper = format(round(`95%`$upper, 2), nsmall = 2),
+    `95%` = glue::glue("({lower}, {upper})")
+  ) |> 
+  select(Month = year_month, `Forecast (millions of dollars)` = .mean, `95% Prediction Interval` = `95%`) |> 
+  knitr::kable()
+```
+
+## Data & methodology
+
+### Background
+
+The United States Census Bureau releases a report each month of monthly estimates of retail sales for a variety of business sectors. One particular estimate that is released is an estimate of monthly retail sales for beer, wine, and liquor stores. This data series has historically displayed a very predictable trend and seasonal pattern, suggesting that it can be predicted by time series forecasting methods.
+
+### The data
+
+The US retail beer, wine, and liquor stores sales data is given as total sales in millions of dollars. Only retail sales data going back to 2010 is considered. This cutoff was arbitrarily chosen so that older data didn't have an impact on the model estimates.
+
+### Tools
+
+The sales data is pulled from fred.com API using the `fredr` R package. The `fable` package is then used to fit the time series models and generate forecasts. The sales data and forecasts for sales are stored in an SQLite database*.
+
+\**Note*: The US Census Bureau will revise it's estimates for previous months as new releases become available. The way I've decided to handle this is to update the observations themselves for the revised estimates when computing forecasting evaluations. However, the forecasts themselves do not get updated as they are based only on data available at the time of the forecast. 
+
+### Forecasting Workflow
+
+The primary model for forecasting beer, wine, and liquor store sales is an ETS model on the log transform of sales. This model is automatically selected each month according to AIC using the automated model selection algorithm available in the `fable` package. A seasonal naive model (which is simply the observation from the previous year for a given month) and an automatically selected ARIMA model are also fit and considered as benchmarks.
+
+The general forecasting workflow for a given data release can be summarized in the following steps:
+
+* Retail sales data going back to 2010 is pulled from fred.com.
+* The ETS model is re-estimated on the data to account for new observations in the data release.
+  - The benchmark models are also re-estimated at this step.
+* The model and benchmark models are saved and ETS forecasts for the next 12 months are generated and stored in the SQLite database.
+* A plot and summary of the ETS forecasts for the next 12 months are generated.
+* Forecast accuracy metrics are recomputed to account for the new data.
+* The README is re-rendered with the updated plots and accuracy metrics.
+
+## Forecasts evaluation
+
+### Overall accuracy measures for 1 to 12-month ahead forecasts
+
+```{r, warning=FALSE}
+# TODO Add some visualizations
+periods <- as.integer(curr_year_month - min(forecasts$fit_year_month))
+
+forecasts_accuracy <- forecasts |> 
+  make_fable(key = c(.model, fit_year_month)) |> 
+  accuracy(observations)
+
+forecasts_accuracy |> 
+  mutate(`Forecasting Periods` = periods) |> 
+  select(Model = .model, `Forecasting Periods`, ME, MAE, MAPE, RMSE, ACF1) |> 
+  arrange(MAE) |> 
+  knitr::kable()
+```
+
+## References
+
+U.S. Census Bureau, Retail Sales: Beer, Wine, and Liquor Stores (MRTSSM4453USN), retrieved from FRED, Federal Reserve Bank of St. Louis; https://fred.stlouisfed.org/series/MRTSSM4453USN, May 18, 2023.
