@@ -17,7 +17,6 @@ fit_models <- function(data) {
   data |> 
     model(
       ets = ETS(value),
-      arima = ARIMA(value),
       snaive = SNAIVE(value)
     )
 }

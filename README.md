@@ -61,8 +61,7 @@ an ETS model on the log transform of sales. This model is automatically
 selected each month according to AIC using the automated model selection
 algorithm available in the `fable` package. A seasonal naive model
 (which is simply the observation from the previous year for a given
-month) and an automatically selected ARIMA model are also fit and
-considered as benchmarks.
+month) and is also fit and considered as a benchmark.
 
 The general forecasting workflow for a given data release can be
 summarized in the following steps:
@@ -70,7 +69,8 @@ summarized in the following steps:
 - Retail sales data going back to 2010 is pulled from fred.com.
 - The ETS model is re-estimated on the data to account for new
   observations in the data release.
-  - The benchmark models are also re-estimated at this step.
+  - The benchmark seasonal naive model is also re-estimated at this
+    step.
 - The model and benchmark models are saved and ETS forecasts for the
   next 12 months are generated and stored in the SQLite database.
 - A plot and summary of the ETS forecasts for the next 12 months are
@@ -86,7 +86,6 @@ summarized in the following steps:
 |:-------|--------------------:|-----------:|----------:|----------:|----------:|-----:|
 | ets    |                   1 |   9.923702 |  9.923702 | 0.1762960 |  9.923702 |   NA |
 | snaive |                   1 | -10.000000 | 10.000000 | 0.1776514 | 10.000000 |   NA |
-| arima  |                   1 |        NaN |       NaN |       NaN |       NaN |   NA |
 
 ## References
 
